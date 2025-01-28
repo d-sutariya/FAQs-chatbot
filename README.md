@@ -101,25 +101,6 @@ Ensure you have the following installed on your system:
 - **Preloaded Data**:
   - Contains a sample `question_answer.json` for quick startup.
 
----
+## Video Explanation
 
-## Contributing
-1. Fork the repository.
-2. Create a new branch for your feature or bug fix.
-3. Commit your changes and push them to your branch.
-4. Open a pull request.
-
----
-
-## License
-This project is licensed under the MIT License. See the `LICENSE` file for details.
-
----
-
-## Acknowledgements
-- Built using Flask for the backend.
-- Frontend powered by vanilla JavaScript and Node.js.
-
----
-
-Feel free to reach out for any queries or suggestions!
+https://drive.google.com/file/d/1gWQF1SrLjuddcU74vv8ty9W9kcAMl_2t/view?usp=sharing

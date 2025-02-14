@@ -4,19 +4,19 @@ from db_manager import UploadedFiles,ChatRecord
 import os
 import json
 from dotenv import load_dotenv
-import requests
 from PyPDF2 import PdfReader
+from langchain.vectorstores import FAISS 
+from langchain.text_splitter import RecursiveCharacterTextSplitter
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_google_genai.embeddings import GoogleGenerativeAIEmbeddings
+from langchain.prompts import PromptTemplate
+from langchain.schema import HumanMessage,SystemMessage
 
 
 load_dotenv()
 app = create_app()
-HF_API_KEY=os.getenv("HF_API_KEY")
 
-INFERENCE_API_URL = "https://api-inference.huggingface.co/models/deepset/roberta-base-squad2"
-
-headers = {
-    "Authorization": f"Bearer {HF_API_KEY}"
-}
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 @app.route('/ask', methods=['POST'])
 def chat():
@@ -27,30 +27,26 @@ def chat():
         return jsonify({"response": "Please provide a message."})
 
     # Fetch all content from the UploadedFiles table
-    uploaded_files = UploadedFiles.query.all()
-    combined_context = " ".join(file.file_content for file in uploaded_files)  # Combine all file content
-
+    # uploaded_files = UploadedFiles.query.all()
+    # combined_context = " ".join(file.file_content for file in uploaded_files)  # Combine all file content
+    embedder = GoogleGenerativeAIEmbeddings(model='models/embedding-001',google_api_key=GEMINI_API_KEY)
+    knowledge_base = FAISS.load_local("knowledge_base",embeddings=embedder,allow_dangerous_deserialization=True)
+    relevant_docs=knowledge_base.similarity_search(
+        query=user_message,
+        k = 2
+    )
+    combined_context = ''.join([doc.page_content for doc in relevant_docs])
     if not combined_context:
         return jsonify({"response": "No context available to answer your question."})
 
-    # Prepare the payload for the Hugging Face API
-    payload = {
-        "inputs": {
-            "question": user_message,
-            "context": combined_context
-        }
-    }
+    llm = ChatGoogleGenerativeAI(model = 'models/gemini-1.5-flash',api_key=GEMINI_API_KEY)
+    prompt = [
+        SystemMessage("The below is context if you don't know the answer strictly replay politely:\n"+combined_context),
+        HumanMessage(user_message)
+    ]
 
-    response = requests.post(INFERENCE_API_URL, headers=headers, json=payload)
-
-    if response.status_code == 200:
-        response_data = response.json()
-        # Check if the API returned an answer
-        bot_reply = response_data.get("answer", "I'm sorry, I couldn't find an answer to your question.")
-        if not bot_reply.strip():  # Fallback response if the answer is empty
-            bot_reply = "I'm sorry, I couldn't find an answer to your question. Please check the company's policies or FAQs, or reach out to support."
-    else:
-        bot_reply = "An error occurred while processing your request. Please try again later."
+    response = llm.invoke(prompt)
+    bot_reply = response.content
 
     # Store the query and response in the database
     chat_record = ChatRecord(
@@ -90,6 +86,7 @@ def upload_file():
                 for page in reader.pages:
                     file_content += page.extract_text()
                 print(file_content)
+                
         elif file_extension == 'json':
             # If the file is JSON, load the content as JSON
             with open(file_path, 'r', encoding='utf-8') as saved_file:
@@ -112,6 +109,16 @@ def upload_file():
     db.session.add(uploaded_file)
     db.session.commit()
 
+    # update the vectore database
+    text_splitter = RecursiveCharacterTextSplitter()
+    docs = text_splitter.split_text(str(file_content))
+    embedder = GoogleGenerativeAIEmbeddings(
+        model='models/embedding-001',
+        google_api_key=GEMINI_API_KEY
+    )
+    knowledge_db = FAISS.load_local("knowledge_base",embeddings=embedder,allow_dangerous_deserialization=True)
+    knowledge_db.add_documents(docs)
+    knowledge_db.save_local("knowledge_base")
     return jsonify({"message": f"File '{file.filename}' uploaded and content saved to database!"})
 
 if __name__ == '__main__':

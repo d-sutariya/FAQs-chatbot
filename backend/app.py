@@ -20,44 +20,50 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 @app.route('/ask', methods=['POST'])
 def chat():
-    data = request.get_json()  # Get user message
+    data = request.get_json()  
+    user_id = data.get("user_id", "default_user")
     user_message = data.get("message", "").lower()
 
     if not user_message:
         return jsonify({"response": "Please provide a message."})
 
-    # Fetch all content from the UploadedFiles table
-    # uploaded_files = UploadedFiles.query.all()
-    # combined_context = " ".join(file.file_content for file in uploaded_files)  # Combine all file content
-    embedder = GoogleGenerativeAIEmbeddings(model='models/embedding-001',google_api_key=GEMINI_API_KEY)
-    knowledge_base = FAISS.load_local("knowledge_base",embeddings=embedder,allow_dangerous_deserialization=True)
-    relevant_docs=knowledge_base.similarity_search(
-        query=user_message,
-        k = 2
-    )
-    combined_context = ''.join([doc.page_content for doc in relevant_docs])
-    if not combined_context:
-        return jsonify({"response": "No context available to answer your question."})
+    # Load vector store and search for relevant documents
+    embedder = GoogleGenerativeAIEmbeddings(model='models/embedding-001', google_api_key=GEMINI_API_KEY)
+    knowledge_base = FAISS.load_local("knowledge_base", embeddings=embedder, allow_dangerous_deserialization=True)
+    relevant_docs = knowledge_base.similarity_search(query=user_message, k=2)
 
-    llm = ChatGoogleGenerativeAI(model = 'models/gemini-1.5-flash',api_key=GEMINI_API_KEY)
+    # Combine context from top-k similar documents
+    combined_context = ''.join([doc.page_content for doc in relevant_docs])
+
+    # Fallback response if no relevant documents are found
+    if not combined_context.strip():
+        fallback_response = (
+            "I couldn't find relevant information to answer your question. "
+        )
+        return jsonify({"response": fallback_response})
+
+    
+    system_prompt = (
+        "You are a helpful assistant. Use the provided context to answer the user's question accurately. "
+        "If the context doesn't contain the information needed, respond politely saying  I couldn't find relevant information to answer your question. "
+        f"Context:\n{combined_context}"
+    )
+
+    llm = ChatGoogleGenerativeAI(model='models/gemini-1.5-flash', api_key=GEMINI_API_KEY)
     prompt = [
-        SystemMessage("The below is context if you don't know the answer strictly replay politely:\n"+combined_context),
+        SystemMessage(system_prompt),
         HumanMessage(user_message)
     ]
-
     response = llm.invoke(prompt)
     bot_reply = response.content
 
-    # Store the query and response in the database
-    chat_record = ChatRecord(
-        user_id="default_user",  
-        query=user_message,
-        response=bot_reply
-    )
+    # Save chat interaction to database
+    chat_record = ChatRecord(user_id=user_id, query=user_message, response=bot_reply)
     db.session.add(chat_record)
     db.session.commit()
 
     return jsonify({"response": bot_reply})
+
 
 @app.route('/admin/upload', methods=['POST'])
 def upload_file():
